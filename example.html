@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<title>example</title>
+	<!-- <link href="style.css" rel="stylesheet" type="text/css" /> -->
+	<script src="jquery-1.10.2.js"></script>
+	<script src="raphael.js"></script>
+	<script src="extend.js"></script>
+	<script src="stockCharts.js"></script>
+	<script src="tmpl.js"></script>
+	<script src="convertFenshi.js"></script>
+	<style>
+		.fenshi_u9jh {
+			margin-bottom: 2em
+		}
+
+		.fenshi_u9jh .info,
+		._5fen_zpzd .info {
+			height: 2em
+		}
+	</style>
+</head>
+
+<body>
+	<div class="fenshi_u9jh">
+		<div class="info"></div>
+		<div class="chart"></div>
+		<script type="text/html" id="tmp_u9jh">
+			<span class="time"><:=data.time:></span>
+			<span class="pricelabel">价位：</span><span class="price"><:=data.price:></span>
+			<span class="anotherlabel">another：</span><span class="another"><:=data.another:></span>
+		</script>
+	</div>
+
+	<script type="text/javascript">
+		function randomInt(min, max) {
+			return Math.floor((max - min + 1) * Math.random()) + min;
+		}
+
+		function mockData(from, to) {
+			var price = 8.56;
+			var priceLow = price * 0.9;
+			var priceHigh = price * 1.1;
+			var from = Date.parse(from + ' 09:30');
+			var to = Date.parse(to + ' 15:00');
+
+			var data = [];
+
+			while (from <= to) {
+				var p = randomInt(-5, 5) / 1000 + 1;
+				price *= p;
+				if (price < priceLow) {
+					price = priceLow * (randomInt(0, 5) / 1000 + 1);
+				} else if (price > priceHigh) {
+					price = priceHigh * (randomInt(-5, 0) / 1000 + 1);
+				}
+				data.push([from, Number(price.toFixed(2))]);
+				var date = new Date(from);
+				if (date.getHours() === 11 && date.getMinutes() === 30) {
+					from += 90 * 60 * 1000; // skip to 13:00
+				} else if (date.getHours() === 15 && date.getMinutes() === 0) {
+					from += 18.5 * 60 * 60 * 1000; // skip to 09:30 of next day
+				} else {
+					from += 60 * 1000;
+				}
+			}
+
+			return data;
+		}
+
+		// 分时 09:30 ~ 11:30, 13:00 ~ 15:00 包头包尾，每天242个点
+
+		(function() {
+			var yestdayClose = 8.56; // 昨收
+
+			var info = $('.fenshi_u9jh .info')[0]; // info div
+			var infoTmp = tmpl(document.getElementById('tmp_u9jh').innerHTML); // info template
+
+			// 建立一个画布
+			var chartsetContainer = $('.fenshi_u9jh .chart')[0];
+			var chartset = new stockCharts(chartsetContainer, {
+				width: 500,
+				height: 200
+			});
+
+			var chart = chartset.chart({
+				borderColor: '#9B9B9B', // 图表外框颜色
+
+				// mousemove事件, x为X轴单位量，line.data[x]为线条在X轴上单位量为x的数据。
+				mousemove: function(x) {
+					if (linePrice.data[x]) {
+						linePrice.removeMarkers(); // 清除之前的标记点
+						linePrice.mark(x); // 在线条x单位标个点
+
+						lineAnother.removeMarkers(); // 清除之前的标记点
+						lineAnother.mark(x); // 在线条x单位标个点
+
+						var d = new Date(linePrice.data[x][0]),
+							time = d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+						info.innerHTML = infoTmp({
+							time: time,
+							price: linePrice.data[x][1],
+							another: lineAnother.data[x][1]
+						});
+					}
+				},
+
+				drawBefore: function() {
+					var me = this,
+						root = me.chartset.root;
+					if (!root.clientWidth) {
+						root.style.visibility = 'hidden';
+						document.body.appendChild(root);
+					}
+				},
+
+				drawAfter: function() {
+					var me = this,
+						root = me.chartset.root;
+					if (root.style.visibility == 'hidden') {
+						me.chartset.container.appendChild(root);
+						root.style.visibility = 'visible';
+					}
+				},
+
+				// 刻度
+				tick: {
+					width: 48, // 刻度标记宽
+					height: 12, // 刻度标记高
+					fontFamily: 'Arial, Helvetica, 微软雅黑, 宋体, sans-serif', // 字体
+					fontSize: 12, // 字号
+					padding: 2 // 标记与图表间距
+				},
+
+				axisX: {
+					units: 242, // X轴单位总量
+					ticks: [
+						[1, '09:30'],
+						[61, '10:30'],
+						[121, '11:30/13:00'],
+						[182, '14:00'],
+						[242, '15:00']
+					], // 刻度标记 [单位, 显示文字]
+					tickColor: '#001E7C', // 刻度标记颜色
+					lineColor: '#D2D2D2' // 刻度线颜色
+				},
+
+				axisY: {
+					min: yestdayClose * 0.99, // 初始化最小值
+					max: yestdayClose * 1.01, // 初始化最大值
+
+					/*
+					datachange: Y轴数据的最大值最小值改变时，重新设置Y轴最小、最大值
+					args: 数据的最小、最大值
+					return [min, max]
+					*/
+
+					/*
+					// 昨收作为中间线
+					datachange: function(min, max){
+						if(min == max)
+							return [min * 0.99, max * 1.01];
+
+						var a = Math.abs(min / yestdayClose - 1),
+							b = Math.abs(max / yestdayClose - 1),
+							c = a > b ? a : b;
+						return [yestdayClose - yestdayClose * c, yestdayClose + yestdayClose * c];
+					},
+					*/
+
+					// 动态调整昨收基线
+					datachange: function(min, max) {
+						if (min == max)
+							return [min * 0.999, max * 1.001];
+
+						// 一共画9条线, 最下条和最上条差8个单位距离
+						var padding = (max - min) / 8 / 4; // 上下留白单位距离的1/4
+						max += padding;
+						min -= padding;
+						if (min < 0)
+							min = 0;
+						var step = (max - min) / 8, // 每条线之间单位距离
+							refs = [];
+
+						// 上方第二条线到下方第二条线. 第一条和最后一条线不作为基线
+						for (var i = 1; i < 8; i++)
+							refs.push(min + i * step);
+
+						// 计算昨收离哪条线最近
+						refs.sort(function(a, b) {
+							return Math.abs(yestdayClose - a) - Math.abs(yestdayClose - b);
+						});
+
+						var ref = refs[0], // 取最近的那条线作为参考线
+							n = (ref - min) / step; // 参考线在n个单位距离上
+
+						// 重新计算单位距离step
+						// 新的单位距离必须大于原单位距离, 否则min和max会溢出
+						if (yestdayClose > ref) { // 昨收大于参考线
+							var step2 = (yestdayClose - min) / n; // 以昨收作为第n个单位距离, 重新计算单位距离. 以到min的距离除以单位量得到的单位距离比原单位距离大.
+							max = min + 8 * step2; // 计算新的最大值
+							return [min, max];
+						} else { // 昨收小于参考线
+							var step2 = (max - yestdayClose) / (8 - n); // 以昨收作为第n个单位距离, 重新计算单位距离. 以到max的距离除以单位量得到的单位距离比原单位距离大.
+							min = max - 8 * step2; // 计算新的最小值
+							if (min < 0)
+								min = 0;
+							return [min, max];
+						}
+					},
+
+					ticknum: 9, // 刻度标记数数量
+
+					// 刻度标记格式
+					tickFormat: function(val) {
+						return val.toFixed(2);
+					},
+
+					// 刻度标记颜色
+					tickColor: function(val) {
+						return val == yestdayClose ? '#000000' : val > yestdayClose ? '#FC0404' : '#00A800';
+					},
+
+					// 刻度线颜色
+					lineColor: function(val) {
+						return val == yestdayClose ? '#848484' : '#D2D2D2';
+					},
+
+					// 右侧Y轴
+					y2: {
+						show: true, // 是否显示
+
+						// 刻度标记格式
+						tickFormat: function(num) {
+							return (((num / yestdayClose - 1) * 100).toFixed(2) - 0).toFixed(2) + '%'; // (x - 0).toFixed(2) 解决 -0.00 的负号
+						},
+
+						// 刻度标记颜色
+						tickColor: function(val) {
+							val = val.slice(0, -1);
+							return val == 0 ? '#000000' : val > 0 ? '#FC0404' : '#00A800';
+						}
+					}
+				}
+			});
+
+			/*
+			chart.eventlayer.mouseout(function(){
+				linePrice.removeMarkers();
+				lineAnother.removeMarkers();
+			});
+			*/
+
+			// 建立一根线
+			var linePrice = chart.line({
+				color: '#007CC8', // 线条颜色
+				markColor: '#007CC8' // 标记颜色
+			});
+
+
+			/* ajax数据格式：
+			[
+				[timestamp, price],
+				[timestamp, price],
+				...
+			]
+			*/
+
+			var data = mockData('2013-08-06', '2013-08-06');
+			// 把数据加入线条
+			linePrice.addData(data.slice(0, 1));
+			linePrice.addData(data.slice(1, 100));
+			setTimeout(function() {
+				// 加入新数据
+				linePrice.addData(data.slice(100));
+			}, 1000);
+
+			setTimeout(function() {
+				var data = mockData('2013-08-06', '2013-08-06');
+				// 重置数据
+				linePrice.setData(data);
+			}, 2000);
+
+
+			// 建立另一根线
+			var lineAnother = chart.line({
+				color: '#EDB1B1',
+				markColor: '#EDB1B1' // 标记颜色
+			});
+
+			var data = mockData('2013-08-06', '2013-08-06');
+			lineAnother.addData(data);
+			window.chartset = chartset;
+		})();
+	</script>
+
+	<div class="_5fen_zpzd">
+		<div class="info"></div>
+		<div class="chart"></div>
+		<script type="text/html" id="tmp_zpzd">
+			<span class="time"><:=data.time:></span>
+			<span class="openlabel">开：</span><span class="open"><:=data.open:></span>
+			<span class="highlabel">高：</span><span class="high"><:=data.high:></span>
+			<span class="lowlabel">低：</span><span class="low"><:=data.high:></span>
+			<span class="closelabel">收：</span><span class="close"><:=data.close:></span>
+		</script>
+	</div>
+
+	<script type="text/javascript">
+		(function() {
+			// 5分 09:30 ~ 11:30, 13:00 ~ 15:00 上午09:35分第一个点，下午13:05分第一个点，共48个点
+			var yestdayClose = 8.56; // 昨收
+
+			var info = $('._5fen_zpzd .info')[0], // info div
+				infoTmp = tmpl(document.getElementById('tmp_zpzd').innerHTML); // info template
+
+			// 建立一个画布
+			var chartset = new stockCharts($('._5fen_zpzd .chart')[0], {
+				width: 500,
+				height: 200
+			});
+
+			var chart = chartset.chart({
+				// mousemove事件, x为X轴单位量，line.data[x]为线条在X轴上单位量为x的数据。
+				mousemove: function(x) {
+					if (candlestick.data[x]) {
+						candlestick.removeMarkers(); // 清除之前的标记点
+						candlestick.mark(x); // 在线条x单位标个点
+
+						var d = new Date(candlestick.data[x][0] * 1000),
+							time = d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+						info.innerHTML = infoTmp({
+							time: time,
+							open: candlestick.data[x][1],
+							high: candlestick.data[x][2],
+							low: candlestick.data[x][3],
+							close: candlestick.data[x][4]
+						});
+					}
+				},
+
+				drawBefore: function() {
+					var me = this,
+						root = me.chartset.root;
+					if (!root.clientWidth) {
+						root.style.visibility = 'hidden';
+						document.body.appendChild(root);
+					}
+				},
+
+				drawAfter: function() {
+					var me = this,
+						root = me.chartset.root;
+					if (root.style.visibility == 'hidden') {
+						me.chartset.container.appendChild(root);
+						root.style.visibility = 'visible';
+					}
+				},
+
+				// 刻度
+				tick: {
+					width: 48, // 刻度标记宽
+					height: 12, // 刻度标记高
+					fontFamily: 'Arial, Helvetica, 微软雅黑, 宋体, sans-serif', // 字体
+					fontSize: 12, // 字号
+					padding: 2 // 标记与图表间距
+				},
+
+				axisX: {
+					padding: 3, // X轴与边框间隔。K线矩形会超出边框，需要设置padding
+					units: 48, // X轴单位总量
+					ticks: [
+						[1, '09:30'],
+						[12, '10:30'],
+						[24, '11:30/13:00'],
+						[36, '14:00'],
+						[48, '15:00']
+					], // 刻度标记 [单位, 显示文字]
+					tickColor: '#001E7C', // 刻度标记颜色
+
+					// 刻度线颜色
+					lineColor: function(val) {
+						return val == '09:30' || val == '15:00' ? '#FFFFFF' : '#D2D2D2';
+					}
+				},
+
+				axisY: {
+					min: yestdayClose * 0.99, // 初始化最小值
+					max: yestdayClose * 1.01, // 初始化最大值
+
+					/*
+					datachange: Y轴数据的最大值最小值改变时，重新设置Y轴最小、最大值
+					args: 数据的最小、最大值
+					return [min, max]
+					*/
+					// 动态调整昨收基线
+					datachange: function(min, max) {
+						if (min == max)
+							return [min * 0.999, max * 1.001];
+
+						// 一共画9条线, 最下条和最上条差8个单位距离
+						var padding = (max - min) / 8 / 4; // 上下留白单位距离的1/4
+						max += padding;
+						min -= padding;
+						if (min < 0)
+							min = 0;
+						var step = (max - min) / 8, // 每条线之间单位距离
+							refs = [];
+
+						// 上方第二条线到下方第二条线. 第一条和最后一条线不作为基线
+						for (var i = 1; i < 8; i++)
+							refs.push(min + i * step);
+
+						// 计算昨收离哪条线最近
+						refs.sort(function(a, b) {
+							return Math.abs(yestdayClose - a) - Math.abs(yestdayClose - b);
+						});
+
+						var ref = refs[0], // 取最近的那条线作为参考线
+							n = (ref - min) / step; // 参考线在n个单位距离上
+
+						// 重新计算单位距离step
+						// 新的单位距离必须大于原单位距离, 否则min和max会溢出
+						if (yestdayClose > ref) { // 昨收大于参考线
+							var step2 = (yestdayClose - min) / n; // 以昨收作为第n个单位距离, 重新计算单位距离. 以到min的距离除以单位量得到的单位距离比原单位距离大.
+							max = min + 8 * step2; // 计算新的最大值
+							return [min, max];
+						} else { // 昨收小于参考线
+							var step2 = (max - yestdayClose) / (8 - n); // 以昨收作为第n个单位距离, 重新计算单位距离. 以到max的距离除以单位量得到的单位距离比原单位距离大.
+							min = max - 8 * step2; // 计算新的最小值
+							if (min < 0)
+								min = 0;
+							return [min, max];
+						}
+					},
+
+					ticknum: 9, // 刻度标记数数量
+
+					// 刻度标记格式
+					tickFormat: function(val) {
+						return val.toFixed(2);
+					},
+
+					// 刻度标记颜色
+					tickColor: function(val) {
+						return val == yestdayClose ? '#000000' : val > yestdayClose ? '#FC0404' : '#00A800';
+					},
+
+					// 刻度线颜色
+					lineColor: function(val) {
+						return val == yestdayClose ? '#848484' : '#D2D2D2';
+					},
+
+					// 右侧Y轴
+					y2: {
+						show: true, // 是否显示
+
+						// 刻度标记格式
+						tickFormat: function(num) {
+							return (((num / yestdayClose - 1) * 100).toFixed(2) - 0).toFixed(2) + '%'; // (x - 0).toFixed(2) 解决 -0.00 的负号
+						},
+
+						// 刻度标记颜色
+						tickColor: function(val) {
+							val = val.slice(0, -1);
+							return val == 0 ? '#000000' : val > 0 ? '#FC0404' : '#00A800';
+						}
+					}
+				}
+			});
+
+			// 建立一条K线序列
+			var candlestick = chart.candlestick();
+
+			var data = mockData('2013-08-06', '2013-08-06');
+			// 把分时数据转为5分数据
+			var _5fen = convertFenshi(data, 5);
+			candlestick.addData(_5fen);
+		})();
+	</script>
+
+</body>
+</html>
